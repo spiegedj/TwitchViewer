@@ -6,12 +6,13 @@ import sys
 import os 
 import json        
 import subprocess
+import signal
 
 #------- GLOBALS -----------
-player = "'/usr/bin/omxplayer -o hdmi'"
 twitchApiUrl = 'https://api.twitch.tv/kraken/'
-gameLimit = 50
-streamLimit = 50
+clientID = 'e5yp1mbb10ju6dmag1irayg4ncybz5j'
+accessToken = 'a7vx7pwxfhiidyn7zmup202fuxgr3k'
+pageLimit = 30
 pipe = open('/dev/input/js0', 'r')
 
 class Color:
@@ -97,112 +98,209 @@ def TwitchCall(method, params):
 def Clear():
     os.system('clear')
 
-def GetGames():
+
+def RemoveNonASCII(text):
+    return ''.join([i if ord(i) < 128 else ' ' for i in text])
+
+def SafeJSONAccess(node, subnode):
+    if subnode in node:
+        value = node[subnode]
+        if isinstance(value, basestring):
+            value = RemoveNonASCII(value)
+            if len(value) > 80:
+                value = value[0:80]
+                value += '...'
+        elif value is not None:
+            value = '{:,}'.format(int(value))
+        else:
+            value = ''
+        return value
+    return ''
+
+def GetGames(pageNumber, y):
     Clear()
     print "loading..."
     method = 'games/top'
-    params = {'limit': gameLimit}
+    offset = pageNumber * pageLimit
+    params = {'offset' : offset, 'limit': pageLimit}
     gamesDict = TwitchCall(method, params)
     count = len(gamesDict['top'])
 
     games = []
     for i in range(count):
         item = gamesDict['top'][i]
-        game = [item['game']['name'].encode('utf-8'), item['viewers'], item['channels']]
+        if 'game' not in item: continue
+
+        name = SafeJSONAccess(item['game'], 'name')
+        viewers = SafeJSONAccess(item, 'viewers')
+        channels = SafeJSONAccess(item, 'channels')
+
+        game = [name, viewers, channels]
         games.append(game)
 
     return games
 
-def GetStreams(game):
+def GetMyGames(pageNumber, y):
+    Clear();
+    games = []
+    games.append(['Starcraft II'])
+    games.append(['Kerbal Space Program'])
+    games.append(['Super Smash Bros. Melee'])
+    games.append(['Super Smash Bros. for Wii U'])
+    games.append(['Counter-Strike: Global Offensive'])
+    games.append(['Planetside 2'])
+    return games
+    
+
+def GetFollowedStreams(pageNumber, y):
     Clear()
     print "loading..."
-    method = 'streams'
-    params = {'limit': streamLimit, 'game': game}
+    method = 'streams/followed'
+    offset = pageNumber * pageLimit
+    params = {'offset': offset, 'limit': pageLimit, 'oauth_token' : accessToken}
     streamsDict = TwitchCall(method, params)
     count = len(streamsDict['streams'])
 
     streams = []
     for i in range(count):
         item = streamsDict['streams'][i]
-        followers = -1
-        if 'followers' in item['channel']:
-            followers = item['channel']['followers']
-        stream = [item['channel']['name'], item['viewers'], followers]
+        if 'channel' not in item: continue
+
+        status = SafeJSONAccess(item['channel'], 'status')
+        game = SafeJSONAccess(item, 'game')
+        name = SafeJSONAccess(item['channel'], 'name')
+        viewers = SafeJSONAccess(item, 'viewers')
+
+        stream = [name, game, status, viewers]
         streams.append(stream)
 
     return streams
 
-def PrintMenu(rows, selected, title, headers):
+def GetTopStreams(pageNumber, y):
+    Clear()
+    print "loading..."
+    method = 'streams'
+    offset = pageNumber * pageLimit
+    params = {'offset': offset, 'limit': pageLimit}
+    streamsDict = TwitchCall(method, params)
+    count = len(streamsDict['streams'])
+
+    streams = []
+    for i in range(count):
+        item = streamsDict['streams'][i]
+        if 'channel' not in item: continue
+
+        status = SafeJSONAccess(item['channel'], 'status')
+        game = SafeJSONAccess(item, 'game')
+        name = SafeJSONAccess(item['channel'], 'name')
+        viewers = SafeJSONAccess(item, 'viewers')
+
+        stream = [name, game, status, viewers]
+        streams.append(stream)
+
+    return streams
+
+def GetStreams(pageNumber, game):
+    Clear()
+    print "loading..."
+    method = 'streams'
+    offset = pageNumber * pageLimit
+    params = {'offset': offset, 'limit': pageLimit, 'game': game}
+    streamsDict = TwitchCall(method, params)
+    count = len(streamsDict['streams'])
+
+    streams = []
+    for i in range(count):
+        item = streamsDict['streams'][i]
+        if 'channel' not in item: continue
+
+        status = SafeJSONAccess(item['channel'], 'status')
+        name = SafeJSONAccess(item['channel'], 'name')
+        followers = SafeJSONAccess(item['channel'], 'followers')
+        viewers = SafeJSONAccess(item, 'viewers')
+
+        stream = [name, status, viewers, followers]
+        streams.append(stream)
+
+    return streams
+
+def PrintMenu(rows, selected, pageNum, table):
     # Print Menu
     Clear()
-    print Color.GREEN + title + Color.END
-    row_format = "{:<50}" * (len(headers) + 1)
-    print Color.BOLD + row_format.format("", *headers) + Color.END
+    print Color.GREEN + table.Title + Color.END
+    print Color.BOLD + table.RowFormat.format("", *table.Headers) + Color.END
+    if len(rows) == 0:
+        print ''
+        print Color.BOLD + "NO RESULTS FOUND" + Color.END
+        print ''
+        return
 
     for i in range(len(rows)):
         row = rows[i]
         if (i == selected):
-            print Color.UNDERLINE + row_format.format("", *row) + Color.END
+            print Color.UNDERLINE + table.RowFormat.format("", *row) + Color.END
         else:
-            print row_format.format("", *row)
-        
-def StreamMenu(game):
-    streams = GetStreams(game)
-    done = False
-    selected = 0
+            print table.RowFormat.format("", *row)
 
-    while not done:
-        PrintMenu(streams, selected, game, ["Name", "Views", "Followers"])
-        
-        # Get Input
-        button = Input.NONE
-        while button == Input.NONE:
-            action,button = ReadInput()
+    print Color.GREEN + ("Page %s" % (pageNum + 1)) + Color.END
 
-        if action == Action.BUTTON_DOWN:
-            if button == Input.BUTTON_A:
-                PlayStream(streams[selected][0])
-            if button == Input.BUTTON_B:
-                done = True
-            elif button == Input.AXIS_DOWN:
-                selected = (selected + 1) % len(streams)
-            elif button == Input.AXIS_UP:
-                selected = max(selected - 1, 0)
-            if button == Input.BUTTON_Y:
-                streams=GetStreams(game)
-                
+class Table:
+    def __init__(self, title, headers, rowFormat):
+        self.Title = title
+        self.Headers = headers
+        self.RowFormat = rowFormat
 
+class Menu:
+    def __init__(self, successDel, listDel, table):
+        self.SuccessDel = successDel
+        self.Table = table
+        self.ListDel = listDel
+    def Run(self, param):
+        self.Table.Title = param
+        done = False
+        selected = 0
+        pageNum = 0
+        rows = self.ListDel(pageNum, param)
 
-def GamesMenu():
-    games = GetGames()
-    done = False
-    selected = 0
+        while not done:
+            PrintMenu(rows, selected, pageNum, self.Table)
+            
+            # Get Input
+            button = Input.NONE
+            while 1:
+                action,button = ReadInput()
 
-    while not done:
-        PrintMenu(games, selected, "Top Game List", ["Name", "Viewers", "Channels"])
-        
-        # Get Input
-        button = Input.NONE
-        while button == Input.NONE:
-            action,button = ReadInput()
+                if action == Action.BUTTON_DOWN:
+                    if button == Input.BUTTON_A:
+                        self.SuccessDel(rows[selected][0])
+                        break;
+                    if button == Input.BUTTON_B:
+                        done = True
+                        break;
+                    elif button == Input.AXIS_DOWN:
+                        selected = (selected + 1) % len(rows)
+                        break;
+                    elif button == Input.AXIS_UP:
+                        selected = max(selected - 1, 0)
+                        break;
+                    elif button == Input.AXIS_RIGHT:
+                        if len(rows) == pageLimit:
+                            pageNum += 1
+                            rows = self.ListDel(pageNum, param)
+                            break;
+                    elif button == Input.AXIS_LEFT:
+                        if pageNum > 0:
+                            pageNum -= 1
+                            rows = self.ListDel(pageNum, param)
+                            break;
+                    if button == Input.BUTTON_Y:
+                        rows = self.ListDel(pageNum, param)
+                        break;
 
-        if action == Action.BUTTON_DOWN:
-            if button == Input.BUTTON_A:
-                StreamMenu(games[selected][0])
-            elif button == Input.AXIS_DOWN:
-                selected = (selected + 1) % len(games)
-            elif button == Input.AXIS_UP:
-                selected = max(selected - 1, 0)
-            if button == Input.BUTTON_Y:
-                games=GetGames()
-        
-    
 def PlayStream(stream):
     Clear()
     print "Loading..."
     url = "twitch.tv/%s" % stream
-    command = 'livestreamer twitch.tv/%s best -np "%s"' % (stream, player)
-    #proc = subprocess.call(['livestreamer', url, 'best', '-np', player])
     p = subprocess.Popen(['livestreamer', url, 'best', '-n'])
 
     button = Input.NONE
@@ -210,42 +308,42 @@ def PlayStream(stream):
     while action != Action.BUTTON_DOWN or button != Input.BUTTON_B:
         action,button = ReadInput()
 
-    p.kill()
+    #p.terminate()
+    #process = psutil.Process(p.pid)
+    #child_pid = process.get_children(recursive=true)
+    #for pid in child_pid:
+    #    os.kill(pid.pid, sig)
+    sig = signal.SIGTERM
+    os.kill(p.pid, sig)
 
 
 def main():
+    
+    rowFormat = "{:<10}{:<30}{:<100}{:<15}{:<15}"
+    streamTable = Table('', ["Name", "Status", "Viewers", "Followers"], rowFormat)
+    streamMenu = Menu(PlayStream, GetStreams, streamTable)
 
-    GamesMenu()
+    rowFormat = "{:<10}{:<70}{:<15}{:<15}"
+    gameTable = Table('Top Games List', ["Name", "Viewers", "Channels"], rowFormat)
+    gameMenu = Menu(streamMenu.Run, GetGames, gameTable)
+
+
+    rowFormat = "{:<10}{:<30}{:<50}{:<100}{:<15}"
+    topStreamTable = Table('', ["Name", "Game", "Status", "Viewers"], rowFormat)
+    topStreamsMenu = Menu(PlayStream, GetTopStreams, topStreamTable)
+
+    followedStreamMenu = Menu(PlayStream, GetFollowedStreams, topStreamTable)
+
+    rowFormat ="{:<10}{:<30}"
+    myGamesTable = Table('', ["Game"], rowFormat)
+    myGamesMenu = Menu(streamMenu.Run, GetMyGames, myGamesTable)
+
+    while 1:
+        followedStreamMenu.Run('Followed Stream Menu')
+        myGamesMenu.Run('My Games')
+        gameMenu.Run('Top Games List')
+        topStreamsMenu.Run('Top Streams List')
     return
-
-#   msg = []
-
-#   while 1:
-#       for char in pipe.read(1):
-#           msg += [ord(char)]
-#           if len(msg) == 8:
-#               #print msg
-#               
-
-#               if action == Action.BUTTON_DOWN:
-#                   if button == Input.BUTTON_A:
-#                       print "A"
-#                   elif button == Input.BUTTON_B:
-#                       print "B"
-#                   elif button == Input.BUTTON_X:
-#                       print "X"
-#                   elif button == Input.BUTTON_Y:
-#                       print "Y"
-#                   elif button == Input.BUTTON_L:
-#                       print "L"
-#                   elif button == Input.BUTTON_R:
-#                       print "R"
-#                   elif button == Input.BUTTON_SELECT:
-#                       print "SELECT"
-#                   elif button == Input.BUTTON_START:
-#                       print "START"
-
-#               msg = []
 
 if __name__ == "__main__":
     main()
