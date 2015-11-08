@@ -244,10 +244,12 @@ class Table:
 class LRThreads:
     def __init__(self):
         self.RefreshRate = 5 * 60
+        self.UpdateRate = 60
+
         self.ShortRT = []
         self.LongRT = threading.Timer(self.RefreshRate, self.LoadRowsLong, [])
         self.LongRT.start()
-        self.UpdateT = threading.Timer(10, self.Update, [])
+        self.UpdateT = threading.Timer(self.UpdateRate, self.Update, [])
         self.UpdateT.start()
         self.Menu = None
         self.Lock = threading.Lock()
@@ -269,7 +271,7 @@ class LRThreads:
         self.Lock.acquire()
         if self.Menu is not None:
             self.Menu.Print()
-        self.UpdateT = threading.Timer(10, self.Update, [])
+        self.UpdateT = threading.Timer(self.UpdateRate, self.Update, [])
         self.UpdateT.start()
         self.Lock.release()
 
@@ -336,12 +338,12 @@ def formatTimeAgo(then):
         plural = ""
         if mins > 1: plural = "s"
         mString = "%d minute%s " % (mins, plural)
-    elif mins > 0:
-        plural = ""
-        if mins > 1: plural = "s"
-        mString = "%d minute%s " % (mins, plural)
 
-    return hString + mString + ("%d seconds ago" % secs)
+    plural = ""
+    if mins is not 1: plural = "s"
+    mString = "%d minute%s " % (mins, plural)
+
+    return hString + mString + "ago"
 
 
 class Menu:
